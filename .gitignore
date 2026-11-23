@@ -1,0 +1,6 @@
+vendor/
+.workbuddy/
+.playwright-cli/
+*.genie
+hand_melody_qr.png
+__pycache__/
