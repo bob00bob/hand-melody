@@ -36,6 +36,21 @@ const FORMANTS = {
 
 // 元音连续轴：后元音 → 前元音（舌位从后到前），a 居中
 export const VOWEL_AXIS = ['u', 'o', 'a', 'e', 'i'];
+export const vowelPos = (v) => VOWEL_AXIS.indexOf(v) / (VOWEL_AXIS.length - 1);
+
+// 音色
+export const TIMBRES = {
+  voice: { label: '人声（元音）' },
+  hum: { label: '哼鸣“嗯”' },
+  whistle: { label: '口哨' },
+  robot: { label: '机器人' },
+};
+
+// 闭口哼鸣：F1 低而强，高频共振弱（鼻腔吸收），听感接近“嗯/mm”
+const HUM = {
+  female: { f: [300, 1300, 2500, 3300, 4200], a: [0, -28, -34, -40, -50], b: [60, 150, 200, 250, 300] },
+  male: { f: [250, 1100, 2300, 3000, 3800], a: [0, -26, -32, -38, -48], b: [50, 150, 200, 250, 300] },
+};
 
 export const VOICES = {
   soprano: { label: '女高音', low: 60, span: 24 },
@@ -61,12 +76,12 @@ function vowelAt(voice, pos) {
   };
 }
 
-function makeGlottalWave(ctx) {
-  // 近似声门脉冲 + 唇辐射：谐波按 1/n^1.1 衰减，略暗于锯齿波
+function makeGlottalWave(ctx, rolloff = 1.1) {
+  // 近似声门脉冲 + 唇辐射：谐波按 1/n^rolloff 衰减（1.1 略暗于锯齿波；越小越亮）
   const N = 80;
   const real = new Float32Array(N);
   const imag = new Float32Array(N);
-  for (let n = 1; n < N; n++) imag[n] = 1 / Math.pow(n, 1.1);
+  for (let n = 1; n < N; n++) imag[n] = 1 / Math.pow(n, rolloff);
   return ctx.createPeriodicWave(real, imag);
 }
 
@@ -85,11 +100,13 @@ export class VoiceEngine {
   constructor() {
     this.ctx = null;
     this.voice = 'soprano';
+    this.timbre = 'voice';
     this.vowelPos = 0.5;
     this.gateOn = false;
     this.volume = 0.8;
     this.glide = 0.035;
     this.choir = true;
+    this.f0 = 0;
   }
 
   // ctxOverride：测试时传入 OfflineAudioContext 做离线渲染
@@ -101,7 +118,7 @@ export class VoiceEngine {
     const ctx = ctxOverride || new (window.AudioContext || window.webkitAudioContext)({ latencyHint: 'interactive' });
     this.ctx = ctx;
 
-    // 输出链：formant 合流 → 包络 → 音量 → 限幅 → 输出
+    // 输出链：[人声路 → 环形调制] + [口哨路] → 包络 → 音量 → 限幅 → 输出
     this.env = ctx.createGain();
     this.env.gain.value = 0;
     this.master = ctx.createGain();
@@ -121,6 +138,18 @@ export class VoiceEngine {
     conv.buffer = this._makeImpulse(1.8);
     this.master.connect(this.reverbSend).connect(conv).connect(this.limiter);
 
+    // 环形调制（机器人音色用；其他音色时直通）
+    this.ring = ctx.createGain();
+    this.ring.gain.value = 1;
+    this.ringMod = ctx.createOscillator();
+    this.ringMod.frequency.value = 32;
+    this.ringDepth = ctx.createGain();
+    this.ringDepth.gain.value = 0;
+    this.ringMod.connect(this.ringDepth).connect(this.ring.gain);
+    this.ringMod.start();
+    this.vocalOut = ctx.createGain();
+    this.vocalOut.connect(this.ring).connect(this.env);
+
     // 共振峰滤波组（并联带通）
     this.srcBus = ctx.createGain();
     this.formants = [];
@@ -128,18 +157,18 @@ export class VoiceEngine {
       const bp = ctx.createBiquadFilter();
       bp.type = 'bandpass';
       const g = ctx.createGain();
-      this.srcBus.connect(bp).connect(g).connect(this.env);
+      this.srcBus.connect(bp).connect(g).connect(this.vocalOut);
       this.formants.push({ bp, g });
     }
 
     // 声门源：3 个轻微失谐的振荡器（合唱感），各自独立颤音
-    const wave = makeGlottalWave(ctx);
+    this.waves = { glottal: makeGlottalWave(ctx, 1.1), bright: makeGlottalWave(ctx, 0.55) };
     this.oscs = [];
     const detunes = [0, -9, 8];
     const rates = [5.4, 5.1, 5.8];
     for (let k = 0; k < 3; k++) {
       const osc = ctx.createOscillator();
-      osc.setPeriodicWave(wave);
+      osc.setPeriodicWave(this.waves.glottal);
       osc.frequency.value = 440;
       osc.detune.value = detunes[k];
       const lfo = ctx.createOscillator();
@@ -152,7 +181,7 @@ export class VoiceEngine {
       osc.connect(g).connect(this.srcBus);
       osc.start();
       lfo.start();
-      this.oscs.push({ osc, lfoGain, g });
+      this.oscs.push({ osc, lfo, lfoGain, g });
     }
 
     // 气声：高通噪声进入共振峰组
@@ -165,8 +194,29 @@ export class VoiceEngine {
     noise.connect(hp).connect(this.breath).connect(this.srcBus);
     noise.start();
 
-    this._applyChoir();
-    this._applyVowel(true);
+    // 口哨：正弦 + 跟随音高的窄带气流噪声，比人声高一个八度
+    this.whistleOut = ctx.createGain();
+    this.whistleOut.gain.value = 0;
+    this.whistleOut.connect(this.env);
+    this.whistleOsc = ctx.createOscillator();
+    this.whistleOsc.type = 'sine';
+    this.whistleOsc.frequency.value = 880;
+    this.oscs[0].lfoGain.connect(this.whistleOsc.detune);
+    const wg = ctx.createGain();
+    wg.gain.value = 0.55;
+    this.whistleOsc.connect(wg).connect(this.whistleOut);
+    this.whistleOsc.start();
+    const noise2 = makeNoise(ctx);
+    this.whistleBP = ctx.createBiquadFilter();
+    this.whistleBP.type = 'bandpass';
+    this.whistleBP.Q.value = 12;
+    this.whistleBP.frequency.value = 880;
+    const wn = ctx.createGain();
+    wn.gain.value = 0.35;
+    noise2.connect(this.whistleBP).connect(wn).connect(this.whistleOut);
+    noise2.start();
+
+    this._applyTimbre(true);
     if (!ctxOverride) await ctx.resume();
   }
 
@@ -197,11 +247,41 @@ export class VoiceEngine {
     this._applyChoir();
   }
 
+  setTimbre(t) {
+    if (!TIMBRES[t]) return;
+    this.timbre = t;
+    this._applyTimbre();
+  }
+
+  // 元音对当前音色是否有意义（哼鸣/口哨没有元音）
+  get usesVowel() {
+    return this.timbre === 'voice' || this.timbre === 'robot';
+  }
+
+  _applyTimbre(immediate = false) {
+    if (!this.ctx) return;
+    const t = this.ctx.currentTime;
+    const tc = immediate ? 0.001 : 0.05;
+    const whistle = this.timbre === 'whistle';
+    const robot = this.timbre === 'robot';
+    // 环形调制会损失约 10dB 能量，机器人音色补偿回来
+    this.vocalOut.gain.setTargetAtTime(whistle ? 0 : robot ? 3.2 : 1, t, tc);
+    this.whistleOut.gain.setTargetAtTime(whistle ? 1 : 0, t, tc);
+    // 机器人：更亮的声源 + 32Hz 环形调制（经典 Dalek 声）+ 不加合唱
+    for (const o of this.oscs) o.osc.setPeriodicWave(robot ? this.waves.bright : this.waves.glottal);
+    this.ring.gain.setTargetAtTime(robot ? 0 : 1, t, tc);
+    this.ringDepth.gain.setTargetAtTime(robot ? 1 : 0, t, tc);
+    this.breath.gain.setTargetAtTime(robot ? 0 : 0.05, t, tc);
+    this._applyChoir();
+    this._applyVowel(immediate);
+  }
+
   _applyChoir() {
     if (!this.ctx) return;
     const t = this.ctx.currentTime;
+    const on = this.choir && this.timbre !== 'robot';
     this.oscs.forEach((o, k) => {
-      if (k > 0) o.g.gain.setTargetAtTime(this.choir ? 0.3 : 0, t, 0.05);
+      if (k > 0) o.g.gain.setTargetAtTime(on ? 0.3 : 0, t, 0.05);
     });
   }
 
@@ -209,6 +289,8 @@ export class VoiceEngine {
     if (!this.ctx) return;
     const t = this.ctx.currentTime;
     for (const o of this.oscs) o.osc.frequency.setTargetAtTime(hz, t, this.glide);
+    this.whistleOsc.frequency.setTargetAtTime(hz * 2, t, this.glide);
+    this.whistleBP.frequency.setTargetAtTime(hz * 2, t, this.glide);
     this._setF0(hz);
   }
 
@@ -223,21 +305,28 @@ export class VoiceEngine {
   jumpPitch(hz) {
     if (!this.ctx) return;
     const t = this.ctx.currentTime;
-    for (const o of this.oscs) {
-      o.osc.frequency.cancelScheduledValues(t);
-      o.osc.frequency.setValueAtTime(hz, t);
-    }
+    const set = (p, v) => { p.cancelScheduledValues(t); p.setValueAtTime(v, t); };
+    for (const o of this.oscs) set(o.osc.frequency, hz);
+    set(this.whistleOsc.frequency, hz * 2);
+    set(this.whistleBP.frequency, hz * 2);
     this._setF0(hz);
   }
 
   setVowel(pos) {
+    if (Math.abs(pos - this.vowelPos) < 1e-4) return;
     this.vowelPos = pos;
     this._applyVowel();
   }
 
   _applyVowel(immediate = false) {
     if (!this.ctx) return;
-    const v = vowelAt(this.voice, this.vowelPos);
+    let v;
+    if (this.timbre === 'hum') {
+      const h = HUM[this.voice === 'tenor' || this.voice === 'bass' ? 'male' : 'female'];
+      v = { f: [...h.f], a: [...h.a], b: [...h.b] };
+    } else {
+      v = vowelAt(this.voice, this.vowelPos);
+    }
     const f0 = this.f0 || 0;
     if (f0 * 1.1 > v.f[0]) v.f[0] = f0 * 1.1;
     if (v.f[0] * 1.35 > v.f[1]) v.f[1] = v.f[0] * 1.35;
@@ -246,17 +335,21 @@ export class VoiceEngine {
     this.formants.forEach((fm, k) => {
       fm.bp.frequency.setTargetAtTime(v.f[k], t, tc);
       fm.bp.Q.setTargetAtTime(v.f[k] / v.b[k], t, tc);
-      // 带通峰值 0dB 但窄带会损失能量，用 Q 做补偿
-      const comp = Math.sqrt(v.f[k] / v.b[k]) * 0.9;
+      // 带通峰值 0dB 但窄带会损失能量，用 Q 做补偿；
+      // 共振峰表的 dB 值是相对 F1 的绝对幅度，而声门源本身每倍频程已衰减约 6.6dB，
+      // 不补偿的话 F2/F3 会被衰减两次，前元音（诶/咿）就会发闷、听起来像“喔”
+      const tilt = Math.pow(v.f[k] / 500, 0.8);
+      const comp = Math.sqrt(v.f[k] / v.b[k]) * 0.9 * tilt;
       fm.g.gain.setTargetAtTime(Math.pow(10, v.a[k] / 20) * comp, t, tc);
     });
   }
 
-  // 颤音深度（音分）
+  // 颤音深度（音分）。机器人音色不加颤音
   setVibrato(cents) {
     if (!this.ctx) return;
     const t = this.ctx.currentTime;
-    for (const o of this.oscs) o.lfoGain.gain.setTargetAtTime(cents, t, 0.15);
+    const c = this.timbre === 'robot' ? 0 : cents;
+    for (const o of this.oscs) o.lfoGain.gain.setTargetAtTime(c, t, 0.15);
   }
 
   setVolume(v) {
@@ -269,7 +362,6 @@ export class VoiceEngine {
     const t = this.ctx.currentTime;
     if (on) {
       this.env.gain.setTargetAtTime(level, t, this.gateOn ? 0.05 : 0.025);
-      this.breath.gain.setTargetAtTime(0.05, t, 0.05);
     } else {
       this.env.gain.setTargetAtTime(0, t, 0.06);
     }

@@ -32,7 +32,7 @@
     #gearBtn { position: fixed; right: 14px; bottom: calc(env(safe-area-inset-bottom) + 14px);
       height: 40px; padding: 0 16px; border-radius: 20px; border: 1px solid var(--border);
       background: var(--card); color: var(--sub); font-size: 13px; }
-    #hint { position: fixed; left: 14px; bottom: calc(env(safe-area-inset-bottom) + 24px); right: 100px;
+    #hint { position: fixed; left: 14px; bottom: calc(env(safe-area-inset-bottom) + 16px); right: 100px; line-height: 1.7;
       font-size: 12px; color: var(--dim); pointer-events: none; }
 
     #panel { position: fixed; left: 0; right: 0; bottom: 0; max-height: 75%; overflow-y: auto;
@@ -78,18 +78,20 @@
     </div>
     <div id="stats"></div>
   </div>
-  <div id="hint">手掌上下 = 音高 · 张开 = 唱 · 握拳 = 停</div>
+  <div id="hint">右手：上下=音高 · 张开唱/握拳停<br />左手：高度=音量 · 1啊 2喔 3呜 4诶 5咿</div>
   <button id="gearBtn">设置</button>
 
   <div id="panel">
     <h3>设置 <button id="closePanel">完成</button></h3>
 
     <div class="sec">声音</div>
+    <div class="row"><label>音色</label><select id="s_timbre"></select></div>
     <div class="row"><label>声部</label><select id="s_voice"></select></div>
     <div class="row"><label>合唱叠声</label><input type="checkbox" id="s_choir" /></div>
     <div class="row"><label>元音</label><select id="s_vowelMode">
+      <option value="fingers">左手手指数（1啊 2喔 3呜 4诶 5咿）</option>
       <option value="fixed">固定“啊”</option>
-      <option value="x">手左右移动 u·o·a·e·i</option>
+      <option value="x">右手左右移动 u·o·a·e·i</option>
     </select></div>
     <div class="row"><label>颤音</label><input type="range" id="s_vibrato" min="0" max="40" step="1" /><span class="val" id="v_vibrato"></span></div>
     <div class="row"><label>音量</label><input type="range" id="s_volume" min="0" max="1" step="0.01" /><span class="val" id="v_volume"></span></div>
@@ -130,7 +132,9 @@
       <div><b>手掌上下</b>音高高低（自动吸附到音阶）</div>
       <div><b>张开手掌</b>开始唱</div>
       <div><b>握拳</b>停止</div>
-      <div><b>另一只手</b>抬高更响，放低更轻</div>
+      <div><b>左手高度</b>抬高更响，放低更轻</div>
+      <div><b>左手手指数</b>1 啊 · 2 喔 · 3 呜 · 4 诶 · 5 咿</div>
+      <div><b>换音色</b>设置里可选 哼鸣 / 口哨 / 机器人</div>
       <div><b>没有摄像头</b>手指在屏幕上按住拖动也能唱</div>
     </div>
     <p>手机竖屏放在支架上，人离开 50~80cm，光线充足效果最好</p>

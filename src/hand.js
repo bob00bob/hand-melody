@@ -182,10 +182,13 @@ export function handFeatures(lm) {
   for (const i of tips) s += dist(lm[i], lm[0]);
   const openness = s / tips.length / palm;
 
-  // 伸出的手指数（指尖比第二指节离手腕更远即视为伸直）
+  // 伸出的手指数 0~5（指尖比第二指节离手腕更远即视为伸直）
   const pip = { 8: 6, 12: 10, 16: 14, 20: 18 };
   let fingers = 0;
   for (const i of tips) if (dist(lm[i], lm[0]) > dist(lm[pip[i]], lm[0]) * 1.12) fingers++;
+  // 拇指：指尖离食指根足够远，且比拇指第一关节更远离小指根（握拳时拇指压在手指上，两项都不满足）
+  const thumb = dist(lm[4], lm[5]) > palm * 0.6 && dist(lm[4], lm[17]) > dist(lm[3], lm[17]);
+  if (thumb) fingers++;
 
-  return { x: px, y: py, openness, palm, fingers };
+  return { x: px, y: py, openness, palm, fingers, thumb };
 }

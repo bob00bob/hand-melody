@@ -1,16 +1,16 @@
 import { HandTracker, handFeatures, HAND_EDGES } from './hand.js';
-import { VoiceEngine, VOICES, VOWEL_AXIS } from './voice.js';
+import { VoiceEngine, VOICES, VOWEL_AXIS, TIMBRES, vowelPos } from './voice.js';
 import { SCALES, NOTE_NAMES, Quantizer, scaleNotes, midiToHz, midiName, midiSolfege } from './music.js';
 import { OneEuro } from './filters.js';
 
 // ---------------- 设置 ----------------
 const DEFAULTS = {
-  voice: 'soprano', choir: true, vowelMode: 'fixed', vibrato: 18, volume: 0.8,
+  voice: 'soprano', timbre: 'voice', choir: true, vowelMode: 'fingers', vibrato: 18, volume: 0.8,
   scale: 'pentatonic', key: 0, low: 60, span: 24, snap: 0.85, glide: 35,
   gateMode: 'open', gateTh: 1.4, second: 'volume', mainHand: 'right', follow: 1.5,
   top: 0.12, bottom: 0.12, camAlpha: 0.35, debug: false,
 };
-const STORE_KEY = 'hm_settings_v1';
+const STORE_KEY = 'hm_settings_v2';
 const S = { ...DEFAULTS, ...safeLoad() };
 
 function safeLoad() {
@@ -37,6 +37,11 @@ function fillSelect(el, entries) {
   el.innerHTML = entries.map(([v, t]) => `<option value="${v}">${t}</option>`).join('');
 }
 fillSelect($('s_voice'), Object.entries(VOICES).map(([k, v]) => [k, v.label]));
+fillSelect($('s_timbre'), Object.entries(TIMBRES).map(([k, v]) => [k, v.label]));
+
+// 左手伸出几根手指 → 元音
+const VOWEL_BY_FINGERS = { 1: 'a', 2: 'o', 3: 'u', 4: 'e', 5: 'i' };
+const VOWEL_CH = { u: '呜', o: '喔', a: '啊', e: '诶', i: '咿' };
 fillSelect($('s_scale'), Object.entries(SCALES).map(([k, v]) => [k, v.label]));
 fillSelect($('s_key'), NOTE_NAMES.map((n, i) => [i, n]));
 
@@ -51,11 +56,12 @@ const fmt = {
 function applySetting(k) {
   switch (k) {
     case 'voice': voice.setVoice(S.voice); break;
+    case 'timbre': voice.setTimbre(S.timbre); break;
     case 'choir': voice.setChoir(S.choir); break;
     case 'volume': voice.setVolume(S.volume); break;
     case 'glide': voice.glide = S.glide / 1000 / 3; break;
     case 'follow': fY.minCutoff = S.follow; break;
-    case 'vowelMode': if (S.vowelMode === 'fixed') voice.setVowel(VOWEL_AXIS.indexOf('a') / (VOWEL_AXIS.length - 1)); break;
+    case 'vowelMode': if (S.vowelMode !== 'x') { st.vowel = 'a'; voice.setVowel(vowelPos('a')); } break;
     case 'scale': case 'key': quant.reset(); break;
     default: break;
   }
@@ -155,6 +161,9 @@ const st = {
   vibOn: false,
   feat: null,
   source: '-',
+  vowel: 'a',
+  fingerCand: 0,
+  fingerSince: 0,
 };
 
 function processDetections(landmarks) {
@@ -204,6 +213,15 @@ function updateControl(nowMs) {
     if (second && S.second === 'volume') {
       const v = fVol.filter(yToU(second.palm.y), tSec);
       level = 0.12 + 0.88 * v;
+    }
+    // 左手手指数选元音：同一个数保持 120ms 才切换，避免手指动作过程中误触发；握拳(0)保持当前元音
+    if (second && S.vowelMode === 'fingers') {
+      const n = second.f.fingers;
+      if (n !== st.fingerCand) { st.fingerCand = n; st.fingerSince = nowMs; }
+      else if (n >= 1 && nowMs - st.fingerSince >= 120 && VOWEL_BY_FINGERS[n] !== st.vowel) {
+        st.vowel = VOWEL_BY_FINGERS[n];
+        voice.setVowel(vowelPos(st.vowel));
+      }
     }
     st.source = '手';
     st.uLast = u;
@@ -350,11 +368,30 @@ function draw(nowMs) {
       g.stroke();
       g.setLineDash([]);
     }
+    // 副手：显示手指数和对应元音，方便学习手势
+    if (!isMain && S.vowelMode === 'fingers' && voice.usesVowel) {
+      const n = h.f.fingers;
+      const label = n >= 1 ? `${n} 指 · ${VOWEL_CH[VOWEL_BY_FINGERS[n]]}` : '握拳 · 保持';
+      g.font = '15px system-ui, -apple-system, sans-serif';
+      g.fillStyle = C.text;
+      g.textAlign = 'center';
+      g.fillText(label, h.palm.x, h.palm.y - 70);
+      g.textAlign = 'left';
+      g.font = '11px ui-monospace, Consolas, monospace';
+    }
     if (S.debug) {
       g.fillStyle = C.text;
       g.fillText(`open ${h.f.openness.toFixed(2)}  fingers ${h.f.fingers}`, h.palm.x + 12, h.palm.y - 14);
     }
   });
+}
+
+// 当前发出的声音（元音 / 音色）
+function currentSoundLabel() {
+  if (S.timbre === 'hum') return '嗯';
+  if (S.timbre === 'whistle') return '口哨';
+  const v = S.vowelMode === 'x' ? VOWEL_AXIS[Math.round(voice.vowelPos * (VOWEL_AXIS.length - 1))] : st.vowel;
+  return VOWEL_CH[v] + (S.timbre === 'robot' ? '(机器)' : '');
 }
 
 // ---------------- HUD ----------------
@@ -365,12 +402,11 @@ let hudT = 0;
 function updateHud(nowMs) {
   if (nowMs - hudT < 80) return;
   hudT = nowMs;
-  const vowelCh = { u: '呜', o: '喔', a: '啊', e: '诶', i: '咿' };
-  const vi = S.vowelMode === 'fixed' ? 'a' : VOWEL_AXIS[Math.round(voice.vowelPos * (VOWEL_AXIS.length - 1))];
+  const sound = currentSoundLabel();
   if (st.gate) {
     const name = midiName(st.midi);
     const cents = Math.round((st.midi - Math.round(st.midi)) * 100);
-    noteEl.innerHTML = `${name}<small>${midiSolfege(st.midi, S.key)} · ${vowelCh[vi]}</small>`;
+    noteEl.innerHTML = `${name}<small>${midiSolfege(st.midi, S.key)} · ${sound}</small>`;
     noteSub.textContent = `${midiToHz(st.midi).toFixed(1)} Hz` + (Math.abs(cents) > 3 ? `  ${cents > 0 ? '+' : ''}${cents}¢` : '');
   } else {
     noteEl.innerHTML = `--<small></small>`;
