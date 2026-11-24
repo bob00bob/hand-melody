@@ -1,0 +1,162 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no,viewport-fit=cover" />
+  <meta name="theme-color" content="#141e1d" />
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Ccircle cx='5' cy='10' r='4' fill='%232f9c86'/%3E%3Ccircle cx='11' cy='6' r='4' fill='%234bad97'/%3E%3C/svg%3E" />
+  <title>Hand Harmony · 手势和声</title>
+  <style>
+    :root {
+      --bg: #141e1d; --card: #1c2928; --input: #243534; --border: #2b3b39;
+      --accent: #2f9c86; --accent-h: #4bad97; --text: #dcece8; --sub: #a4b5b0; --dim: #6f817c;
+    }
+    * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+    html, body { margin: 0; height: 100%; background: var(--bg); color: var(--text);
+      font-family: system-ui, -apple-system, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+      overflow: hidden; overscroll-behavior: none; user-select: none; -webkit-user-select: none; }
+    #stage { position: fixed; inset: 0; touch-action: none; z-index: 1; }
+    #view { width: 100%; height: 100%; display: block; }
+    video { position: fixed; inset: 0; width: 100%; height: 100%; object-fit: cover; z-index: 0; pointer-events: none; }
+    #hud, #chips, #gearBtn, #panel { z-index: 2; }
+
+    #hud { position: fixed; top: calc(env(safe-area-inset-top) + 12px); left: 14px; right: 14px;
+      display: flex; justify-content: space-between; align-items: flex-start; pointer-events: none; }
+    #chord { font-size: 44px; font-weight: 500; line-height: 1; letter-spacing: 0.5px; }
+    #chord small { font-size: 18px; color: var(--sub); margin-left: 8px; font-weight: 400; }
+    #chordSub { font-size: 13px; color: var(--sub); margin-top: 7px; }
+    #stats { font: 11px/1.5 ui-monospace, Consolas, monospace; color: var(--dim); text-align: right; white-space: pre; }
+
+    /* 和弦性质选择条：显示左手手指数对应关系，也可以直接点（触摸模式 / 没有左手时生效） */
+    #chips { position: fixed; left: 10px; right: 10px; bottom: calc(env(safe-area-inset-bottom) + 62px);
+      display: flex; gap: 6px; justify-content: center; }
+    #chips button { flex: 1 1 0; max-width: 92px; min-width: 0; height: 40px; border-radius: 10px;
+      border: 1px solid var(--border); background: rgba(28,41,40,0.88); color: var(--sub);
+      font-size: 13px; padding: 0 2px; line-height: 1.1; white-space: nowrap; overflow: hidden; }
+    #chips button i { display: block; font-style: normal; font-size: 10px; color: var(--dim); margin-bottom: 2px; }
+    #chips button.on { border-color: var(--accent); color: var(--text); background: rgba(47,156,134,0.22); }
+    #chips button.on i { color: var(--accent-h); }
+
+    #gearBtn { position: fixed; right: 14px; bottom: calc(env(safe-area-inset-bottom) + 12px);
+      height: 38px; padding: 0 16px; border-radius: 19px; border: 1px solid var(--border);
+      background: var(--card); color: var(--sub); font-size: 13px; }
+    #hint { position: fixed; left: 14px; bottom: calc(env(safe-area-inset-bottom) + 14px); right: 100px; line-height: 1.6;
+      font-size: 12px; color: var(--dim); pointer-events: none; z-index: 2; }
+
+    #panel { position: fixed; left: 0; right: 0; bottom: 0; max-height: 78%; overflow-y: auto;
+      background: var(--card); border-top: 1px solid var(--border); border-radius: 14px 14px 0 0;
+      padding: 14px 18px calc(env(safe-area-inset-bottom) + 18px); transform: translateY(105%);
+      transition: transform .22s ease; max-width: 560px; margin: 0 auto; z-index: 3; }
+    #panel.open { transform: none; }
+    #panel h3 { margin: 0 0 6px; font-size: 14px; font-weight: 500; display: flex; justify-content: space-between; align-items: center; }
+    #panel h3 button { background: var(--input); border: 1px solid var(--border); color: var(--sub); font-size: 12px; border-radius: 8px; padding: 5px 12px; }
+    .sec { font-size: 12px; color: var(--dim); margin: 14px 0 2px; }
+    .row { display: flex; align-items: center; gap: 10px; margin: 9px 0; font-size: 13px; color: var(--sub); }
+    .row label { width: 84px; flex: none; }
+    .row select, .row input[type=range] { flex: 1; min-width: 0; }
+    .row .val { width: 58px; text-align: right; color: var(--text); font-variant-numeric: tabular-nums; font-size: 12px; }
+    select { background: var(--input); color: var(--text); border: 1px solid var(--border); border-radius: 8px; padding: 7px 8px; font-size: 13px; }
+    input[type=range] { accent-color: var(--accent); }
+    input[type=checkbox] { accent-color: var(--accent); width: 18px; height: 18px; margin: 0; }
+
+    #intro { position: fixed; inset: 0; background: var(--bg); display: flex; flex-direction: column;
+      align-items: center; justify-content: center; padding: 28px; text-align: center; z-index: 5; overflow-y: auto; }
+    #intro h1 { font-size: 22px; font-weight: 500; margin: 0 0 6px; }
+    #intro p { color: var(--sub); font-size: 13px; line-height: 1.8; margin: 4px 0; max-width: 380px; }
+    #intro .how { text-align: left; background: var(--card); border: 1px solid var(--border);
+      border-radius: 12px; padding: 10px 16px; margin: 18px 0; max-width: 380px; }
+    #intro .how div { font-size: 13px; color: var(--sub); line-height: 2; }
+    #intro .how b { color: var(--text); font-weight: 500; display: inline-block; width: 92px; }
+    #startBtn { background: var(--accent); color: #0f1716; border: none; border-radius: 10px;
+      padding: 13px 34px; font-size: 15px; font-weight: 500; }
+    #startBtn:active { background: var(--accent-h); }
+    #startBtn:disabled { opacity: .5; }
+    #status { margin-top: 14px; font-size: 12px; color: var(--dim); min-height: 18px; max-width: 360px; line-height: 1.6; }
+    #status.err { color: #d98c7a; }
+    #intro a { color: var(--dim); font-size: 12px; margin-top: 10px; }
+  </style>
+</head>
+<body>
+  <div id="stage"><canvas id="view"></canvas></div>
+  <video id="cam" playsinline muted autoplay></video>
+
+  <div id="hud">
+    <div>
+      <div id="chord">--<small></small></div>
+      <div id="chordSub">举起右手开始</div>
+    </div>
+    <div id="stats"></div>
+  </div>
+  <div id="chips"></div>
+  <div id="hint">右手高度=级数 · 张开奏/握拳停<br />左手手指数=和弦性质</div>
+  <button id="gearBtn">设置</button>
+
+  <div id="panel">
+    <h3>设置 <button id="closePanel">完成</button></h3>
+
+    <div class="sec">和声</div>
+    <div class="row"><label>调</label><select id="s_key"></select></div>
+    <div class="row"><label>调式</label><select id="s_mode"></select></div>
+    <div class="row"><label>左手映射</label><select id="s_preset"></select></div>
+    <div class="row"><label>级数范围</label><select id="s_range">
+      <option value="7">I ~ VII（7 档）</option>
+      <option value="8">I ~ VII ~ 高八度 I（8 档）</option>
+    </select></div>
+    <div class="row"><label>转位</label><select id="s_voicing">
+      <option value="smooth">就近声部进行（平滑）</option>
+      <option value="root">原位（手越高和弦越高）</option>
+    </select></div>
+    <div class="row"><label>和声音区</label><input type="range" id="s_center" min="56" max="72" step="1" /><span class="val" id="v_center"></span></div>
+    <div class="row"><label>低音根音</label><input type="checkbox" id="s_bass" /></div>
+
+    <div class="sec">声音</div>
+    <div class="row"><label>音色</label><select id="s_timbre"></select></div>
+    <div class="row"><label>颤音</label><input type="range" id="s_vibrato" min="0" max="30" step="1" /><span class="val" id="v_vibrato"></span></div>
+    <div class="row"><label>换和弦滑音</label><input type="range" id="s_glide" min="5" max="200" step="5" /><span class="val" id="v_glide"></span></div>
+    <div class="row"><label>混响</label><input type="range" id="s_reverb" min="0" max="0.6" step="0.02" /><span class="val" id="v_reverb"></span></div>
+    <div class="row"><label>音量</label><input type="range" id="s_volume" min="0" max="1" step="0.01" /><span class="val" id="v_volume"></span></div>
+
+    <div class="sec">手势</div>
+    <div class="row"><label>发声方式</label><select id="s_gateMode">
+      <option value="open">右手张开奏 / 握拳停</option>
+      <option value="always">看到右手就奏</option>
+    </select></div>
+    <div class="row"><label>握拳阈值</label><input type="range" id="s_gateTh" min="1.0" max="1.8" step="0.02" /><span class="val" id="v_gateTh"></span></div>
+    <div class="row"><label>左手高度</label><select id="s_second">
+      <option value="volume">控制音量</option>
+      <option value="off">忽略</option>
+    </select></div>
+    <div class="row"><label>级数手</label><select id="s_mainHand">
+      <option value="right">画面右侧的手</option>
+      <option value="left">画面左侧的手</option>
+    </select></div>
+    <div class="row"><label>级数防抖</label><input type="range" id="s_hyst" min="0" max="0.4" step="0.02" /><span class="val" id="v_hyst"></span></div>
+    <div class="row"><label>跟手度</label><input type="range" id="s_follow" min="0.3" max="6" step="0.1" /><span class="val" id="v_follow"></span></div>
+    <div class="row"><label>上边距</label><input type="range" id="s_top" min="0" max="0.4" step="0.01" /><span class="val" id="v_top"></span></div>
+    <div class="row"><label>下边距</label><input type="range" id="s_bottom" min="0.2" max="0.45" step="0.01" /><span class="val" id="v_bottom"></span></div>
+    <div class="row"><label>显示摄像头</label><input type="range" id="s_camAlpha" min="0" max="1" step="0.05" /><span class="val" id="v_camAlpha"></span></div>
+    <div class="row"><label>调试信息</label><input type="checkbox" id="s_debug" /></div>
+  </div>
+
+  <div id="intro">
+    <h1>Hand Harmony · 手势和声</h1>
+    <p>右手选“第几级和弦”，左手选“什么和弦”，两只手一起弹出和声进行</p>
+    <div class="how">
+      <div><b>右手高度</b>级数 I ~ VII（从下往上）</div>
+      <div><b>右手张开/握拳</b>奏响 / 停止</div>
+      <div><b>左手手指数</b>和弦性质（下方色块有对照）</div>
+      <div><b>左手握拳/不举</b>顺阶和弦（调内自动大/小/减）</div>
+      <div><b>常用映射</b>1 大三 · 2 小三 · 3 属七 · 4 大七 · 5 小七</div>
+      <div><b>试试</b>I → vi → IV → V（左手不举）</div>
+      <div><b>没有摄像头</b>屏幕上按住上下拖，点下方色块换性质</div>
+    </div>
+    <p>手机竖屏放在支架上，人离开 50~80cm，光线充足效果最好</p>
+    <button id="startBtn">开始</button>
+    <div id="status"></div>
+    <a href="../">← 单音版 Hand Melody</a>
+  </div>
+
+  <script type="module" src="./src/main.js"></script>
+</body>
+</html>
